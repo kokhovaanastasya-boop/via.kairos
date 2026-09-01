@@ -39,8 +39,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 def get_sub_keyboard():
     return {
         "inline_keyboard": [
-            [{"text": "🖤 1. Подписаться на канал", "url": CHANNEL_INVITE_URL}],
-            [{"text": "✅ 2. Я подписалась! Забрать подарки", "callback_data": "check_sub"}]
+            [{"text": "🖤 Подписаться на канал", "url": CHANNEL_INVITE_URL}],
+            [{"text": "✅ Я подписалась! Забрать подарки", "callback_data": "check_sub"}]
         ]
     }
 
@@ -187,8 +187,6 @@ def handle_update(update):
             "Я — <b>Анастасия (@via.kairos)</b>.\n"
             "Забираю страхи, выбиваю синдром «хорошей девочки» и возвращаю природную дерзость.\n\n"
             "🔒 <b>Для получения подарков обязательно подпишись на мой канал:</b>\n"
-            " <b> 🖤 Подпишись на канал»</b>\n"
-            " <b> ✅ Я подписалась! Забрать подарки»</b> 👇"
         )
         send_message(chat_id, start_text, get_sub_keyboard())
 
@@ -243,8 +241,8 @@ def handle_update(update):
             caption = (
                 "🔥 <b>Обожаю жадных до жизни и денег девушек! Именно такие и забирают всё лучшее</b>\n\n"
                 "Твой полный комплект Наглости готов:\n\n"
-                "1️⃣ <b>ГАЙД:</b> «Манифест Наглости».\n"
-                "2️⃣ <b>КНИГА:</b> Книга «Финансовый флирт: 100 фраз и правила ухода».\n\n"
+                "1️⃣ <b>ГАЙД:</b> «Манифест Наглости» синдром хорошей девочки.\n"
+                "2️⃣ <b>КНИГА:</b> Книга «Как красиво просить,отвечать и уходить».\n\n"
                 "Скромность не украшает. Украшают чеки и подарки 😉"
             )
             send_document(chat_id, PDF_FILE_PATH, caption=caption, reply_markup=get_after_gift_keyboard())
