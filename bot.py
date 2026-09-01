@@ -1,4 +1,4 @@
-##!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Telegram Bot for @via.kairos (Анастасия)
 100% Обязательная подписка на канал перед выдачей подарков
@@ -16,8 +16,14 @@ import threading
 import time
 import requests
 
-# Токен бота
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8850880508:AAFRaJaMfi4UU515edLtSBUXyTRSMo5KStw")
+# Токен бота — ТОЛЬКО из переменной окружения.
+# Старый токен 8850880508:AAHGe... отозван в BotFather и больше не работает (401).
+# Никогда не храни токен в коде: он утекает вместе с репозиторием и перепиской.
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+if not BOT_TOKEN:
+    print("❌ Не задан BOT_TOKEN. Render: Environment -> BOT_TOKEN = токен от @BotFather.\n"
+          "   Локально: BOT_TOKEN=123:ABC python3 bot.py", file=sys.stderr)
+    sys.exit(1)
 API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 CHANNEL_INVITE_URL = "https://t.me/+0hwBdSVNsDcyZGYy"
@@ -51,11 +57,40 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 processed_updates = set()
 processed_callbacks = set()
 
-# === 🧹 ПАМЯТЬ ПОСЛЕДНИХ СООБЩЕНИЙ БОТА (для автоудаления) ===
-# {chat_id: [message_id, ...]}  — все сообщения бота, которые нужно снести
-# при отправке следующего экрана.
+# === 🧹 ПАМЯТЬ СООБЩЕНИЙ БОТА (для автоудаления) ===
+# {chat_id: [message_id, ...]}
+# ВАЖНО: раньше словарь жил только в ОЗУ. На Render free-плане сервис засыпает
+# через 15 мин простоя и перезапускается — память обнулялась, и старые сообщения
+# оставались в чате навсегда. Теперь состояние пишется на диск.
+MESSAGES_FILE = "messages.json"
 last_bot_messages = {}
 _msg_lock = threading.Lock()
+
+
+def _load_messages():
+    global last_bot_messages
+    try:
+        if os.path.exists(MESSAGES_FILE):
+            with open(MESSAGES_FILE, "r", encoding="utf-8") as f:
+                last_bot_messages = {int(k): v for k, v in json.load(f).items()}
+            logging.info(f"🗂 Загружена история сообщений: {len(last_bot_messages)} чат(ов)")
+    except Exception as e:
+        logging.warning(f"Не удалось прочитать {MESSAGES_FILE}: {e}")
+        last_bot_messages = {}
+
+
+def _save_messages():
+    """Атомарная запись, чтобы файл не побился при рестарте посреди сохранения."""
+    try:
+        tmp = MESSAGES_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({str(k): v for k, v in last_bot_messages.items()}, f)
+        os.replace(tmp, MESSAGES_FILE)
+    except Exception as e:
+        logging.warning(f"Не удалось сохранить {MESSAGES_FILE}: {e}")
+
+
+_load_messages()
 
 
 # === 🌐 ВСТРОЕННЫЙ СЕРВЕР ДЛЯ RENDER (УСТРАНЯЕТ ОШИБКУ NO OPEN PORTS / TIMEOUT) ===
@@ -88,8 +123,8 @@ def start_health_server():
 def get_sub_keyboard():
     return {
         "inline_keyboard": [
-            [{"text": "Подписаться на канал 🖤", "url": CHANNEL_INVITE_URL}],
-            [{"text": "Я подписалась!✅ Забрать подарки 🎁", "callback_data": "check_sub"}]
+            [{"text": "🖤 Подписаться на канал", "url": CHANNEL_INVITE_URL}],
+            [{"text": "✅ Я подписалась! Забрать подарки 🎁", "callback_data": "check_sub"}]
         ]
     }
 
@@ -162,6 +197,7 @@ def remember_message(chat_id, response):
             mid = response["result"]["message_id"]
             with _msg_lock:
                 last_bot_messages.setdefault(chat_id, []).append(mid)
+                _save_messages()
     except Exception:
         pass
 
@@ -170,10 +206,45 @@ def clear_previous(chat_id, extra_ids=None):
     """Удаляем ВСЕ предыдущие сообщения бота в этом чате (+ доп. id, напр. сообщение юзера)."""
     with _msg_lock:
         ids = last_bot_messages.pop(chat_id, [])
+        _save_messages()
     if extra_ids:
         ids = list(ids) + [i for i in extra_ids if i]
-    for mid in set(ids):
-        delete_message(chat_id, mid)
+    ids = sorted(set(i for i in ids if i), reverse=True)
+    if not ids:
+        return
+    # удаляем параллельно — иначе 5 сообщений это 5 последовательных запросов (~1.5 c)
+    threads = [threading.Thread(target=delete_message, args=(chat_id, mid), daemon=True)
+               for mid in ids]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=6)
+
+
+# Глубина «подметания» старых сообщений, ID которых бот не помнит
+# (например, отправленных прошлым деплоем до появления трекинга). 0 = выключить.
+SWEEP_DEPTH = int(os.getenv("SWEEP_DEPTH", "40"))
+
+
+def sweep_legacy_messages(chat_id, from_id, depth=None):
+    """Пробуем снести хвост старых сообщений бота выше текущего.
+
+    Чужие сообщения Telegram удалить не даст (вернёт 400) — это безопасно и тихо.
+    Работает только для сообщений моложе 48 часов: таково ограничение Bot API.
+    """
+    depth = SWEEP_DEPTH if depth is None else depth
+    if depth <= 0 or not from_id:
+        return
+
+    def _run():
+        deleted = 0
+        for mid in range(from_id - 1, max(0, from_id - depth - 1), -1):
+            if delete_message(chat_id, mid):
+                deleted += 1
+        if deleted:
+            logging.info(f"🧹 Подчищено старых сообщений в чате {chat_id}: {deleted}")
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 # === ОТПРАВКА (с автоудалением предыдущего экрана) ===
@@ -270,26 +341,164 @@ def answer_callback(cb_id, text=None, show_alert=False):
         pass
 
 
-def is_subscribed_api(user_id):
-    """Проверка подписки через Telegram Bot API"""
+SUBSCRIBED_STATUSES = ("member", "administrator", "creator", "restricted")
+LEFT_STATUSES = ("left", "kicked")
+
+# Отзывать подарки, когда человек отписался от канала
+REVOKE_ON_UNSUB = os.getenv("REVOKE_ON_UNSUB", "1") == "1"
+# Как часто перепроверять подписчиков (сек). Нужен как подстраховка,
+# если апдейт chat_member не пришёл (бот не админ / рестарт во время события).
+SUB_CHECK_INTERVAL = int(os.getenv("SUB_CHECK_INTERVAL", "300"))
+
+
+def get_member_status(user_id):
+    """Статус пользователя в канале. None — если проверить не удалось (сеть/права)."""
     global channel_id
     if not channel_id:
-        return True
+        return None
     try:
-        r = requests.get(f"{API_URL}/getChatMember", params={"chat_id": channel_id, "user_id": user_id}, timeout=5)
+        r = requests.get(
+            f"{API_URL}/getChatMember",
+            params={"chat_id": channel_id, "user_id": user_id},
+            timeout=8
+        )
         res = r.json()
         if res.get("ok"):
-            status = res.get("result", {}).get("status", "")
-            return status in ["member", "administrator", "creator", "restricted"]
+            return res.get("result", {}).get("status", "")
+        logging.warning(f"getChatMember: {res.get('description')}")
     except Exception as e:
         logging.error(f"Error checking sub: {e}")
-    return True
+    return None
 
+
+def is_subscribed_api(user_id):
+    """Проверка подписки. При ошибке НЕ блокируем человека (пропускаем)."""
+    if not channel_id:
+        return True
+    status = get_member_status(user_id)
+    if status is None:
+        return True
+    return status in SUBSCRIBED_STATUSES
+
+
+REVOKE_TEXT = (
+    "🖤 <b>Твои подарки убраны из чата.</b>\n\n"
+    "Они были доступны, пока ты в моём канале — там всё самое честное про деньги, "
+    "наглость и высокие чеки.\n\n"
+    "Возвращайся: подпишись заново и забери книгу и гайд обратно 👇"
+)
+
+
+def revoke_gifts(user_chat_id, notify=True):
+    """Человек отписался — сносим все подарки и экраны, зовём обратно."""
+    with _msg_lock:
+        has_something = bool(last_bot_messages.get(user_chat_id))
+    if not has_something:
+        return
+    logging.info(f"🚫 Отписка: отзываю подарки у {user_chat_id}")
+    clear_previous(user_chat_id)
+    if notify:
+        send_message(user_chat_id, REVOKE_TEXT, get_sub_keyboard())
+
+
+def subscription_watchdog():
+    """Фоновая перепроверка: кто ушёл из канала — у того забираем подарки."""
+    while True:
+        time.sleep(SUB_CHECK_INTERVAL)
+        if not (REVOKE_ON_UNSUB and channel_id):
+            continue
+        with _msg_lock:
+            chats = [c for c in last_bot_messages.keys() if c > 0]  # только личные чаты
+        for cid in chats:
+            status = get_member_status(cid)
+            if status in LEFT_STATUSES:   # None (ошибка) НЕ трогаем — иначе снесём лишнее
+                revoke_gifts(cid)
+            time.sleep(0.2)  # бережём лимиты API
+
+
+BOOK_TEXT = (
+    "🫦 <b>Интерактивная книга «Финансовый флирт»</b>\n"
+    "<i>Искусство просить дорого, отвечать дерзко и уходить красиво</i>\n\n"
+    "Хватит быть «удобной». Внутри — не просто фразы, а готовый арсенал для тех, "
+    "кто устал оправдывать свои цены и хочет превратить деньги в игру, "
+    "где главная героиня — ты.\n\n"
+    "<b>Ты получишь:</b>\n\n"
+    "💎 <b>100 готовых фраз</b> для любых переговоров: от первого свидания "
+    "до контракта на миллион.\n"
+    "📜 <b>4 закона</b> безупречного финансового поведения, которые работают "
+    "как заклинание.\n"
+    "🛡 <b>10 щитов</b> против возражений и манипуляций, после которых мужчина "
+    "сам предложит больше.\n"
+    "👠 <b>Мастер-класс по уходу:</b> как сорвать куш и выйти из-за стола "
+    "переговоров королевой, оставив его с чувством, что он упустил нечто грандиозное.\n\n"
+    "<b>Твой ход:</b> нажми на кнопку, чтобы открыть книгу прямо в Telegram 👇\n\n"
+    "<i>Хочешь применить это на своей стратегии — записывайся на личный разбор.</i>"
+)
+
+MANIFEST_TEXT = (
+    "⚡️ <b>«Манифест Наглости»</b> (12 слайдов)\n"
+    "<i>Твой личный детокс от установок «быть хорошей»</i>\n\n"
+    "<b>Внутри гайда:</b>\n\n"
+    "🔎 <b>Диагностика</b> твоей роли, которая сливает деньги.\n"
+    "📝 <b>Экспресс-тест</b> на твой уровень здоровой наглости "
+    "(спойлер: его нужно прокачать).\n"
+    "🚀 <b>Готовая формула дохода:</b> Личность → Бренд → Доход.\n"
+    "💬 <b>Скрипты продаж в переписке</b>, которые закрывают сделки без стеснения.\n\n"
+    "Пора прекращать быть скромной и начинать зарабатывать с удовольствием 🖤"
+)
+
+# Полный оффер для «Я жадная» — уходит ОТДЕЛЬНЫМ сообщением (лимит подписи к файлу 1024)
+BOTH_TEXT = (
+    "🔥 <b>Обожаю жадных до жизни и денег девушек! Именно такие и забирают всё лучшее</b>\n\n"
+    "🫦 <b>Интерактивная книга «Финансовый флирт»</b>\n"
+    "<i>Искусство просить дорого, отвечать дерзко и уходить красиво</i>\n\n"
+    "Хватит быть «удобной». Внутри — не просто фразы, а готовый арсенал для тех, "
+    "кто устал оправдывать свои цены и хочет превратить деньги в игру, "
+    "где главная героиня — ты.\n\n"
+    "💎 <b>100 готовых фраз</b> для любых переговоров: от первого свидания "
+    "до контракта на миллион.\n"
+    "📜 <b>4 закона</b> безупречного финансового поведения, которые работают как заклинание.\n"
+    "🛡 <b>10 щитов</b> против возражений и манипуляций, после которых мужчина "
+    "сам предложит больше.\n"
+    "👠 <b>Мастер-класс по уходу:</b> как сорвать куш и выйти из-за стола "
+    "переговоров королевой.\n\n"
+    "🎁 <b>БОНУС К СТАРТУ: «Манифест Наглости»</b> (12 слайдов)\n"
+    "Твой личный детокс от установок «быть хорошей».\n\n"
+    "🔎 <b>Диагностика</b> твоей роли, которая сливает деньги.\n"
+    "📝 <b>Экспресс-тест</b> на твой уровень здоровой наглости.\n"
+    "🚀 <b>Формула дохода:</b> Личность → Бренд → Чек от 80 000 до 150 000 ₽.\n"
+    "💬 <b>Скрипты продаж в переписке</b> без стеснения.\n\n"
+    "<b>Твой ход:</b> жми на кнопки ниже — книга открывается прямо в Telegram, "
+    "гайд прикреплён файлом 👇\n\n"
+    "Пора прекращать быть скромной и начинать зарабатывать с удовольствием 🖤"
+)
 
 MENU_TEXT = (
     "⚡️ <b>Твой подарок — это не просто подарок. Это пропуск в мой мир наглости😉</b>\n\n"
     "Выбирай, какой подарок хочешь забрать прямо сейчас 👇"
 )
+
+
+# Telegram: подпись к файлу — до 1024 символов, текст — до 4096.
+# Эмодзи считаются за 2, поэтому берём запас.
+CAPTION_LIMIT = 900
+
+
+def send_offer(chat_id, text, keyboard, attach_pdf=True):
+    """Длинный оффер уходит текстом, файл — следом с короткой подписью."""
+    if not attach_pdf:
+        return send_message(chat_id, text, keyboard)
+
+    if len(text) <= CAPTION_LIMIT:
+        return send_document(chat_id, PDF_FILE_PATH, caption=text, reply_markup=keyboard)
+
+    send_message(chat_id, text)  # сначала полное описание
+    return send_document(
+        chat_id,
+        PDF_FILE_PATH,
+        caption="📎 <b>«Манифест Наглости»</b> — твой гайд во вложении 🖤",
+        reply_markup=keyboard
+    )
 
 
 def handle_update(update):
@@ -314,6 +523,21 @@ def handle_update(update):
                 pass
             logging.info(f"🎉 Канал привязан: ID = {channel_id}")
             return
+
+    # Мгновенная реакция на выход из канала (бот должен быть админом канала)
+    if "chat_member" in update:
+        cm = update["chat_member"]
+        try:
+            if channel_id and cm["chat"]["id"] == channel_id:
+                new_status = cm["new_chat_member"]["status"]
+                uid = cm["new_chat_member"]["user"]["id"]
+                if new_status in LEFT_STATUSES and REVOKE_ON_UNSUB:
+                    revoke_gifts(uid)          # в личке chat_id == user_id
+                elif new_status in SUBSCRIBED_STATUSES:
+                    logging.info(f"➕ Новый подписчик канала: {uid}")
+        except Exception as e:
+            logging.warning(f"chat_member: {e}")
+        return
 
     if "channel_post" in update:
         chat = update["channel_post"]["chat"]
@@ -352,6 +576,8 @@ def handle_update(update):
 
         # 🧹 сносим прошлый экран бота + само сообщение пользователя
         clear_previous(chat_id, extra_ids=[user_msg_id])
+        # и хвост старых сообщений, ID которых бот не помнит (прошлый деплой)
+        sweep_legacy_messages(chat_id, user_msg_id)
 
         start_text = (
             "Привет! Рада видеть тебя здесь 🖤\n\n"
@@ -411,50 +637,15 @@ def handle_update(update):
 
         # 3. Выбор гайда «Манифест наглости»
         if data == "gift_money":
-            caption = (
-                "⚡️ <b>Твой авторский «Манифест Наглости» (12 слайдов) готов!</b>\n\n"
-                "Внутри гайда:\n"
-                "🔎 Диагностика роли «хорошей девочки»\n"
-                "🚰 5 установок, сливающих доход\n"
-                "📝 Экспресс-тест на уровень наглости\n"
-                "🚀 Формула: Личность → Бренд → High-Ticket чек (80k–150k ₽)\n"
-                "💬 Готовые скрипты для продаж в переписке\n\n"
-                "Изучай и прекращай быть скромной 🖤"
-            )
-            send_document(chat_id, PDF_FILE_PATH, caption=caption, reply_markup=get_manifest_keyboard())
+            send_offer(chat_id, MANIFEST_TEXT, get_manifest_keyboard(), attach_pdf=True)
 
         # 4. Выбор книги «Финансовый флирт»
         elif data == "gift_book":
-            book_text = (
-                "🫦 <b>Интерактивная книга «Финансовый флирт»</b>\n"
-                "<i>Как красиво просить, отвечать и уходить</i>\n\n"
-                "Внутри книги:\n"
-                "💎 <b>100 готовых фраз</b> на все случаи жизни (от свиданий до переговоров)\n"
-                "📜 <b>4 нерушимых закона</b> финансового флирта\n"
-                "🛡 <b>10 щитов</b> от мужских манипуляций и возражений\n"
-                "👠 <b>Искусство красивого ухода:</b> как выйти из ситуации королевой\n\n"
-                "Нажимай кнопку ниже, чтобы открыть интерактивную книгу прямо в Telegram 👇"
-            )
-            send_message(chat_id, book_text, reply_markup=get_book_keyboard())
+            send_offer(chat_id, BOOK_TEXT, get_book_keyboard(), attach_pdf=False)
 
         # 5. Выбор «Я жадная: хочу забрать ВСЁ»
         elif data == "gift_both":
-            caption = (
-                "🔥 <b>Обожаю жадных до жизни и денег девушек! Именно такие и забирают всё лучшее</b>\n\n"
-                "Твой полный комплект Наглости готов:\n\n"
-                "1️⃣ <b>ГАЙД:</b> «Манифест Наглости» синдром хорошей девочки (прикреплен файлом ниже).\n"
-                "2️⃣ <b>КНИГА:</b> Интерактивная книга «Финансовый флирт: 100 фраз и правила ухода» (кнопка запускает Mini App прямо в Telegram!).\n\n"
-                "Скромность не украшает. Украшают чеки и подарки 😉"
-            )
-            send_document(chat_id, PDF_FILE_PATH, caption=caption, reply_markup=get_both_keyboard())
-
-
-# ВАЖНО: без явного allowed_updates Telegram помнит старый список
-# ["message","callback_query"] и НЕ шлёт my_chat_member / channel_post,
-# из-за чего канал никогда не привязывается и проверка подписки не работает.
-ALLOWED_UPDATES = ["message", "callback_query", "my_chat_member", "channel_post", "chat_member"]
-
-DROP_PENDING = os.getenv("DROP_PENDING", "0") == "1"
+            send_offer(chat_id, BOTH_TEXT, get_both_keyboard(), attach_pdf=True)
 
 
 def main():
@@ -484,6 +675,12 @@ def main():
         requests.post(f"{API_URL}/setChatMenuButton", json={"menu_button": {"type": "default"}}, timeout=10)
     except Exception:
         pass
+
+    threading.Thread(target=subscription_watchdog, daemon=True).start()
+    logging.info(
+        f"👀 Watchdog подписки: проверка каждые {SUB_CHECK_INTERVAL} c, "
+        f"отзыв подарков {'ВКЛ' if REVOKE_ON_UNSUB else 'ВЫКЛ'}"
+    )
 
     if channel_id:
         logging.info(f"🔗 Канал привязан: {channel_id}")
