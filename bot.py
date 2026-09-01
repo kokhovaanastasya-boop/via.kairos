@@ -29,7 +29,15 @@ PDF_FILE_PATH = "Manifest_Naglosti_via_kairos.pdf"
 CHANNEL_ID_FILE = "channel_id.txt"
 channel_id = None
 
-if os.path.exists(CHANNEL_ID_FILE):
+# Приоритет — переменная окружения (на Render файлы пропадают при передеплое)
+_env_channel = os.getenv("CHANNEL_ID", "").strip()
+if _env_channel:
+    try:
+        channel_id = int(_env_channel)
+    except ValueError:
+        logging.warning("CHANNEL_ID должен быть числом вида -1001234567890")
+
+if channel_id is None and os.path.exists(CHANNEL_ID_FILE):
     try:
         with open(CHANNEL_ID_FILE, "r") as f:
             c = f.read().strip()
@@ -418,34 +426,80 @@ def handle_update(update):
             send_document(chat_id, PDF_FILE_PATH, caption=caption, reply_markup=get_both_keyboard())
 
 
+# ВАЖНО: без явного allowed_updates Telegram помнит старый список
+# ["message","callback_query"] и НЕ шлёт my_chat_member / channel_post,
+# из-за чего канал никогда не привязывается и проверка подписки не работает.
+ALLOWED_UPDATES = ["message", "callback_query", "my_chat_member", "channel_post", "chat_member"]
+
+DROP_PENDING = os.getenv("DROP_PENDING", "0") == "1"
+
+
 def main():
     # Запускаем встроенный HTTP-сервер для Render в отдельном потоке
     http_thread = threading.Thread(target=start_health_server, daemon=True)
     http_thread.start()
 
-    logging.info("🚀 Starting Bot @via_kairos_bot...")
+    logging.info("🚀 Starting Bot...")
+
+    # Проверка токена — сразу видно в логах Render, живой бот или нет
+    try:
+        me = requests.get(f"{API_URL}/getMe", timeout=10).json()
+        if me.get("ok"):
+            logging.info(f"✅ Токен рабочий: @{me['result'].get('username')} (id={me['result'].get('id')})")
+        else:
+            logging.error(f"❌ ТОКЕН НЕВЕРНЫЙ: {me}")
+            sys.exit(1)
+    except Exception as e:
+        logging.error(f"❌ Нет связи с Telegram API: {e}")
 
     try:
-        requests.post(f"{API_URL}/deleteWebhook", json={"drop_pending_updates": True}, timeout=10)
+        requests.post(
+            f"{API_URL}/deleteWebhook",
+            json={"drop_pending_updates": DROP_PENDING},
+            timeout=10
+        )
         requests.post(f"{API_URL}/setChatMenuButton", json={"menu_button": {"type": "default"}}, timeout=10)
     except Exception:
         pass
+
+    if channel_id:
+        logging.info(f"🔗 Канал привязан: {channel_id}")
+    else:
+        logging.warning("⚠️ Канал НЕ привязан (channel_id.txt пуст) — проверка подписки пропускается. "
+                        "Добавь бота админом в канал ИЛИ перешли ему любой пост из канала.")
 
     offset = 0
     while True:
         try:
             r = requests.get(
                 f"{API_URL}/getUpdates",
-                params={"offset": offset, "timeout": 10},
-                timeout=15
+                params={
+                    "offset": offset,
+                    "timeout": 25,
+                    "allowed_updates": json.dumps(ALLOWED_UPDATES)
+                },
+                timeout=40
             )
+            if r.status_code == 409:
+                logging.error("❌ CONFLICT 409: этот же токен уже опрашивается другим процессом "
+                              "(второй деплой/локальный запуск). Оставь только ОДИН экземпляр бота!")
+                time.sleep(5)
+                continue
             if r.status_code == 200:
                 res = r.json()
                 if res.get("ok"):
                     for update in res.get("result", []):
                         offset = update["update_id"] + 1
-                        handle_update(update)
+                        try:
+                            handle_update(update)
+                        except Exception as e:
+                            logging.exception(f"Ошибка обработки апдейта: {e}")
+            else:
+                logging.error(f"getUpdates HTTP {r.status_code}: {r.text[:200]}")
+                time.sleep(2)
             time.sleep(0.1)
+        except requests.exceptions.ReadTimeout:
+            continue
         except Exception as e:
             logging.error(f"Polling loop: {e}")
             time.sleep(1)
@@ -453,3 +507,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
