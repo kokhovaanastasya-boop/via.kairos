@@ -3,13 +3,16 @@
 Telegram Bot for @via.kairos (Анастасия)
 100% Обязательная подписка на канал перед выдачей подарков
 Канал: https://t.me/+0hwBdSVNsDcyZGYy
+Со встроенным веб-сервером для Render и кнопками «◀️ Вернуться назад»
 """
 
-import os
-import sys
-import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import logging
+import os
+import sys
+import threading
+import time
 import requests
 
 # Токен бота
@@ -39,12 +42,36 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 processed_updates = set()
 processed_callbacks = set()
 
+# === 🌐 ВСТРОЕННЫЙ СЕРВЕР ДЛЯ RENDER (УСТРАНЯЕТ ОШИБКУ NO OPEN PORTS / TIMEOUT) ===
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain; charset=utf-8')
+        self.end_headers()
+        self.wfile.write(b"OK: via.kairos bot is active 24/7")
+
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
+
+    def log_message(self, format, *args):
+        pass
+
+def start_health_server():
+    port = int(os.getenv("PORT", 10000))
+    try:
+        server = HTTPServer(("0.0.0.0", port), HealthCheckHandler)
+        logging.info(f"🌐 Health server listening on port {port} for Render")
+        server.serve_forever()
+    except Exception as e:
+        logging.error(f"Health server notice: {e}")
+
 # === 1. КНОПКИ ОБЯЗАТЕЛЬНОЙ ПОДПИСКИ (ПРИ /START) ===
 def get_sub_keyboard():
     return {
         "inline_keyboard": [
             [{"text": "🖤 Подписаться на канал", "url": CHANNEL_INVITE_URL}],
-            [{"text": "✅ Я подписалась! Забрать подарки", "callback_data": "check_sub"}]
+            [{"text": "✅ Я подписалась! Забрать подарки 🎁" , "callback_data": "check_sub"}]
         ]
     }
 
@@ -53,7 +80,7 @@ def get_main_keyboard():
     return {
         "inline_keyboard": [
             [{"text": "💸 Манифест наглости", "callback_data": "gift_money"}],
-            [{"text": "📖 Финансовый флирт", "callback_data": "gift_book"}],
+            [{"text": "🫦 Финансовый флирт", "callback_data": "gift_book"}],
             [{"text": "🔥 Я жадная: хочу забрать ВСЁ и сразу!", "callback_data": "gift_both"}]
         ]
     }
@@ -63,7 +90,8 @@ def get_manifest_keyboard():
     return {
         "inline_keyboard": [
             [{"text": "💸 Гайд «Манифест наглости»", "url": PRESENTATION_PREVIEW_URL}],
-            [{"text": "🎯 Записаться на Разбор", "url": AUDIT_INSTAGRAM_URL}]
+            [{"text": "🎯 Записаться на Разбор", "url": AUDIT_INSTAGRAM_URL}],
+            [{"text": "◀️ Вернуться назад", "callback_data": "back_to_menu"}]
         ]
     }
 
@@ -72,7 +100,8 @@ def get_book_keyboard():
     return {
         "inline_keyboard": [
             [{"text": "🫦 Открыть книгу «Финансовый флирт»", "web_app": {"url": MANUFLIRT_URL}}],
-            [{"text": "🎯 Записаться на Разбор", "url": AUDIT_INSTAGRAM_URL}]
+            [{"text": "🎯 Записаться на Разбор", "url": AUDIT_INSTAGRAM_URL}],
+            [{"text": "◀️ Вернуться назад", "callback_data": "back_to_menu"}]
         ]
     }
 
@@ -82,7 +111,8 @@ def get_both_keyboard():
         "inline_keyboard": [
             [{"text": "💸 Гайд «Манифест наглости»", "url": PRESENTATION_PREVIEW_URL}],
             [{"text": "🫦 Книга «Финансовый флирт»", "web_app": {"url": MANUFLIRT_URL}}],
-            [{"text": "🎯 Записаться на Разбор", "url": AUDIT_INSTAGRAM_URL}]
+            [{"text": "🎯 Записаться на Разбор", "url": AUDIT_INSTAGRAM_URL}],
+            [{"text": "◀️ Вернуться назад", "callback_data": "back_to_menu"}]
         ]
     }
 
@@ -136,6 +166,12 @@ def answer_callback(cb_id, text=None, show_alert=False):
         payload["show_alert"] = show_alert
     try:
         requests.post(f"{API_URL}/answerCallbackQuery", json=payload, timeout=5)
+    except Exception:
+        pass
+
+def delete_message(chat_id, message_id):
+    try:
+        requests.post(f"{API_URL}/deleteMessage", json={"chat_id": chat_id, "message_id": message_id}, timeout=5)
     except Exception:
         pass
 
@@ -210,7 +246,6 @@ def handle_update(update):
 
         logging.info(f"Message from {chat_id}: {text}")
         
-        # На команду /start всегда отправляем блок обязательной подписки
         start_text = (
             "Привет! Рада видеть тебя здесь 🖤\n\n"
             "Я — <b>Анастасия (@via.kairos)</b>.\n"
@@ -231,6 +266,7 @@ def handle_update(update):
             processed_callbacks.clear()
             
         chat_id = cb["message"]["chat"]["id"]
+        message_id = cb["message"]["message_id"]
         user_id = cb["from"]["id"]
         data = cb.get("data", "")
         
@@ -254,14 +290,25 @@ def handle_update(update):
             send_message(chat_id, unlock_text, get_main_keyboard())
             return
             
+        # 2. Кнопка «◀️ Вернуться назад»
+        elif data == "back_to_menu":
+            answer_callback(cb_id)
+            delete_message(chat_id, message_id)
+            menu_text = (
+                "⚡️ <b>Твой подарок — это не просто подарок. Это пропуск в мой мир наглости😉</b>\n\n"
+                "Выбирай, какой подарок хочешь забрать прямо сейчас 👇"
+            )
+            send_message(chat_id, menu_text, get_main_keyboard())
+            return
+            
         answer_callback(cb_id)
         
-        # 2. Выбор гайда «Манифест наглости»
+        # 3. Выбор гайда «Манифест наглости»
         if data == "gift_money":
             caption = (
                 "⚡️ <b>Твой авторский «Манифест Наглости» (12 слайдов) готов!</b>\n\n"
                 "Внутри гайда:\n"
-                "🧐 Диагностика роли «хорошей девочки»\n"
+                "🔎 Диагностика роли «хорошей девочки»\n"
                 "🚰 5 установок, сливающих доход\n"
                 "📝 Экспресс-тест на уровень наглости\n"
                 "🚀 Формула: Личность → Бренд → High-Ticket чек (80k–150k ₽)\n"
@@ -270,7 +317,7 @@ def handle_update(update):
             )
             send_document(chat_id, PDF_FILE_PATH, caption=caption, reply_markup=get_manifest_keyboard())
             
-        # 3. Выбор книги «Финансовый флирт» (с описанием и запуском приложения)
+        # 4. Выбор книги «Финансовый флирт»
         elif data == "gift_book":
             book_text = (
                 "🫦 <b>Интерактивная книга «Финансовый флирт»</b>\n"
@@ -284,19 +331,23 @@ def handle_update(update):
             )
             send_message(chat_id, book_text, reply_markup=get_book_keyboard())
 
-        # 4. Выбор «Я жадная: хочу забрать ВСЁ»
+        # 5. Выбор «Я жадная: хочу забрать ВСЁ»
         elif data == "gift_both":
             caption = (
                 "🔥 <b>Обожаю жадных до жизни и денег девушек! Именно такие и забирают всё лучшее</b>\n\n"
                 "Твой полный комплект Наглости готов:\n\n"
-                "1️⃣ <b>ГАЙД:</b> «Манифест Наглости» синдром хорошей девочки.\n"
-                "2️⃣ <b>КНИГА:</b> Интерактивная книга «Финансовый флирт: 100 фраз и правила ухода».\n\n"
+                "1️⃣ <b>ГАЙД:</b> «Манифест Наглости» синдром хорошей девочки (прикреплен файлом ниже).\n"
+                "2️⃣ <b>КНИГА:</b> Интерактивная книга «Финансовый флирт: 100 фраз и правила ухода» (кнопка запускает Mini App прямо в Telegram!).\n\n"
                 "Скромность не украшает. Украшают чеки и подарки 😉"
             )
             send_document(chat_id, PDF_FILE_PATH, caption=caption, reply_markup=get_both_keyboard())
 
 def main():
-    logging.info("🚀 Starting Clean Bot @via_kairos_bot...")
+    # Запускаем встроенный HTTP-сервер для Render в отдельном потоке
+    http_thread = threading.Thread(target=start_health_server, daemon=True)
+    http_thread.start()
+    
+    logging.info("🚀 Starting Bot @via_kairos_bot...")
     
     try:
         requests.post(f"{API_URL}/deleteWebhook", json={"drop_pending_updates": True}, timeout=10)
