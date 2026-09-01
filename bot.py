@@ -3,7 +3,8 @@
 Telegram Bot for @via.kairos (Анастасия)
 100% Обязательная подписка на канал перед выдачей подарков
 Канал: https://t.me/+0hwBdSVNsDcyZGYy
-Со встроенным веб-сервером для Render и кнопками «◀️ Вернуться назад»
+Со встроенным веб-сервером для Render, кнопками «◀️ Вернуться назад»
+и АВТОУДАЛЕНИЕМ предыдущих сообщений (чат всегда чистый: одно сообщение бота).
 """
 
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -42,13 +43,20 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 processed_updates = set()
 processed_callbacks = set()
 
+# === 🧹 ПАМЯТЬ ПОСЛЕДНИХ СООБЩЕНИЙ БОТА (для автоудаления) ===
+# {chat_id: [message_id, ...]}  — все сообщения бота, которые нужно снести
+# при отправке следующего экрана.
+last_bot_messages = {}
+_msg_lock = threading.Lock()
+
+
 # === 🌐 ВСТРОЕННЫЙ СЕРВЕР ДЛЯ RENDER (УСТРАНЯЕТ ОШИБКУ NO OPEN PORTS / TIMEOUT) ===
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header('Content-type', 'text/plain; charset=utf-8')
         self.end_headers()
-        self.wfile.write(b"OK: via.kairos bot is active 24/7")
+        self.wfile.write("OK: via.kairos bot is active 24/7".encode("utf-8"))
 
     def do_HEAD(self):
         self.send_response(200)
@@ -56,6 +64,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):
         pass
+
 
 def start_health_server():
     port = int(os.getenv("PORT", 10000))
@@ -66,14 +75,16 @@ def start_health_server():
     except Exception as e:
         logging.error(f"Health server notice: {e}")
 
+
 # === 1. КНОПКИ ОБЯЗАТЕЛЬНОЙ ПОДПИСКИ (ПРИ /START) ===
 def get_sub_keyboard():
     return {
         "inline_keyboard": [
             [{"text": "🖤 Подписаться на канал", "url": CHANNEL_INVITE_URL}],
-            [{"text": "✅ Я подписалась! Забрать подарки 🎁" , "callback_data": "check_sub"}]
+            [{"text": "✅ Я подписалась! Забрать подарки 🎁", "callback_data": "check_sub"}]
         ]
     }
+
 
 # === 2. ГЛАВНОЕ МЕНЮ ПОДАРКОВ ===
 def get_main_keyboard():
@@ -85,6 +96,7 @@ def get_main_keyboard():
         ]
     }
 
+
 # === 3. КНОПКИ ПОД ГАЙДОМ «МАНИФЕСТ НАГЛОСТИ» ===
 def get_manifest_keyboard():
     return {
@@ -95,6 +107,7 @@ def get_manifest_keyboard():
         ]
     }
 
+
 # === 4. КНОПКИ ПОД ОПИСАНИЕМ КНИГИ «ФИНАНСОВЫЙ ФЛИРТ» ===
 def get_book_keyboard():
     return {
@@ -104,6 +117,7 @@ def get_book_keyboard():
             [{"text": "◀️ Вернуться назад", "callback_data": "back_to_menu"}]
         ]
     }
+
 
 # === 5. КНОПКИ ДЛЯ «Я ЖАДНАЯ» (ВСЁ ВМЕСТЕ) ===
 def get_both_keyboard():
@@ -116,7 +130,46 @@ def get_both_keyboard():
         ]
     }
 
-def send_message(chat_id, text, reply_markup=None):
+
+# === 🧹 БАЗОВЫЕ ФУНКЦИИ УДАЛЕНИЯ ===
+def delete_message(chat_id, message_id):
+    """Тихое удаление одного сообщения."""
+    if not message_id:
+        return False
+    try:
+        r = requests.post(
+            f"{API_URL}/deleteMessage",
+            json={"chat_id": chat_id, "message_id": message_id},
+            timeout=5
+        )
+        return bool(r.json().get("ok"))
+    except Exception:
+        return False
+
+
+def remember_message(chat_id, response):
+    """Запоминаем message_id отправленного ботом сообщения."""
+    try:
+        if response and response.get("ok"):
+            mid = response["result"]["message_id"]
+            with _msg_lock:
+                last_bot_messages.setdefault(chat_id, []).append(mid)
+    except Exception:
+        pass
+
+
+def clear_previous(chat_id, extra_ids=None):
+    """Удаляем ВСЕ предыдущие сообщения бота в этом чате (+ доп. id, напр. сообщение юзера)."""
+    with _msg_lock:
+        ids = last_bot_messages.pop(chat_id, [])
+    if extra_ids:
+        ids = list(ids) + [i for i in extra_ids if i]
+    for mid in set(ids):
+        delete_message(chat_id, mid)
+
+
+# === ОТПРАВКА (с автоудалением предыдущего экрана) ===
+def send_message(chat_id, text, reply_markup=None, track=True):
     payload = {
         "chat_id": chat_id,
         "text": text,
@@ -127,20 +180,29 @@ def send_message(chat_id, text, reply_markup=None):
         payload["reply_markup"] = reply_markup
     try:
         r = requests.post(f"{API_URL}/sendMessage", json=payload, timeout=10)
-        return r.json()
+        res = r.json()
+        if track:
+            remember_message(chat_id, res)
+        return res
     except Exception as e:
         logging.error(f"Error sending message: {e}")
         return None
 
-def send_document(chat_id, file_path, caption=None, reply_markup=None):
+
+def send_document(chat_id, file_path, caption=None, reply_markup=None, track=True):
     for alt in [file_path, "Manifest_Naglosti_via_kairos.pdf", "/home/user/Manifest_Naglosti_via_kairos.pdf"]:
         if os.path.exists(alt):
             file_path = alt
             break
-            
+
     if not os.path.exists(file_path):
-        return send_message(chat_id, (caption or "") + f"\n\n📖 <b>Читать онлайн:</b> {PRESENTATION_PREVIEW_URL}", reply_markup)
-    
+        return send_message(
+            chat_id,
+            (caption or "") + f"\n\n📖 <b>Читать онлайн:</b> {PRESENTATION_PREVIEW_URL}",
+            reply_markup,
+            track=track
+        )
+
     data = {
         "chat_id": chat_id,
         "parse_mode": "HTML"
@@ -149,15 +211,24 @@ def send_document(chat_id, file_path, caption=None, reply_markup=None):
         data["caption"] = caption
     if reply_markup:
         data["reply_markup"] = json.dumps(reply_markup)
-    
+
     try:
         with open(file_path, "rb") as f:
             files = {"document": ("Манифест_Наглости_via_kairos.pdf", f, "application/pdf")}
             r = requests.post(f"{API_URL}/sendDocument", data=data, files=files, timeout=30)
-            return r.json()
+            res = r.json()
+            if track:
+                remember_message(chat_id, res)
+            return res
     except Exception as e:
         logging.error(f"Error sending document: {e}")
-        return send_message(chat_id, (caption or "") + f"\n\n📖 <b>Читать онлайн:</b> {PRESENTATION_PREVIEW_URL}", reply_markup)
+        return send_message(
+            chat_id,
+            (caption or "") + f"\n\n📖 <b>Читать онлайн:</b> {PRESENTATION_PREVIEW_URL}",
+            reply_markup,
+            track=track
+        )
+
 
 def answer_callback(cb_id, text=None, show_alert=False):
     payload = {"callback_query_id": cb_id}
@@ -169,11 +240,6 @@ def answer_callback(cb_id, text=None, show_alert=False):
     except Exception:
         pass
 
-def delete_message(chat_id, message_id):
-    try:
-        requests.post(f"{API_URL}/deleteMessage", json={"chat_id": chat_id, "message_id": message_id}, timeout=5)
-    except Exception:
-        pass
 
 def is_subscribed_api(user_id):
     """Проверка подписки через Telegram Bot API"""
@@ -190,9 +256,16 @@ def is_subscribed_api(user_id):
         logging.error(f"Error checking sub: {e}")
     return True
 
+
+MENU_TEXT = (
+    "⚡️ <b>Твой подарок — это не просто подарок. Это пропуск в мой мир наглости😉</b>\n\n"
+    "Выбирай, какой подарок хочешь забрать прямо сейчас 👇"
+)
+
+
 def handle_update(update):
     global channel_id
-    
+
     update_id = update.get("update_id")
     if update_id in processed_updates:
         return
@@ -212,7 +285,7 @@ def handle_update(update):
                 pass
             logging.info(f"🎉 Канал привязан: ID = {channel_id}")
             return
-            
+
     if "channel_post" in update:
         chat = update["channel_post"]["chat"]
         channel_id = chat["id"]
@@ -229,8 +302,9 @@ def handle_update(update):
         msg = update["message"]
         chat_id = msg["chat"]["id"]
         user_id = msg["from"]["id"]
+        user_msg_id = msg.get("message_id")
         text = (msg.get("text") or "").strip()
-        
+
         # Пересылка любого поста из канала привязывает ID
         if "forward_from_chat" in msg:
             fwd = msg["forward_from_chat"]
@@ -241,11 +315,15 @@ def handle_update(update):
                         f.write(str(channel_id))
                 except Exception:
                     pass
+                clear_previous(chat_id, extra_ids=[user_msg_id])
                 send_message(chat_id, f"✅ Канал «{fwd.get('title')}» успешно привязан!")
                 return
 
         logging.info(f"Message from {chat_id}: {text}")
-        
+
+        # 🧹 сносим прошлый экран бота + само сообщение пользователя
+        clear_previous(chat_id, extra_ids=[user_msg_id])
+
         start_text = (
             "Привет! Рада видеть тебя здесь 🖤\n\n"
             "Я — <b>Анастасия (@via.kairos)</b>.\n"
@@ -264,14 +342,14 @@ def handle_update(update):
         processed_callbacks.add(cb_id)
         if len(processed_callbacks) > 2000:
             processed_callbacks.clear()
-            
+
         chat_id = cb["message"]["chat"]["id"]
         message_id = cb["message"]["message_id"]
         user_id = cb["from"]["id"]
         data = cb.get("data", "")
-        
+
         logging.info(f"Callback from {chat_id}: {data}")
-        
+
         # 1. Проверка подписки
         if data == "check_sub":
             if channel_id and not is_subscribed_api(user_id):
@@ -281,28 +359,25 @@ def handle_update(update):
                     show_alert=True
                 )
                 return
-            
+
             answer_callback(cb_id, text="✅ Подписка подтверждена! Забирай подарки 🖤", show_alert=False)
-            unlock_text = (
-                "⚡️ <b>Твой подарок — это не просто подарок. Это пропуск в мой мир наглости😉</b>\n\n"
-                "Выбирай, какой подарок хочешь забрать прямо сейчас 👇"
-            )
-            send_message(chat_id, unlock_text, get_main_keyboard())
+            # 🧹 удаляем экран с подпиской
+            clear_previous(chat_id, extra_ids=[message_id])
+            send_message(chat_id, MENU_TEXT, get_main_keyboard())
             return
-            
+
         # 2. Кнопка «◀️ Вернуться назад»
         elif data == "back_to_menu":
             answer_callback(cb_id)
-            delete_message(chat_id, message_id)
-            menu_text = (
-                "⚡️ <b>Твой подарок — это не просто подарок. Это пропуск в мой мир наглости😉</b>\n\n"
-                "Выбирай, какой подарок хочешь забрать прямо сейчас 👇"
-            )
-            send_message(chat_id, menu_text, get_main_keyboard())
+            clear_previous(chat_id, extra_ids=[message_id])
+            send_message(chat_id, MENU_TEXT, get_main_keyboard())
             return
-            
+
         answer_callback(cb_id)
-        
+
+        # 🧹 перед выдачей подарка удаляем меню / прошлый экран
+        clear_previous(chat_id, extra_ids=[message_id])
+
         # 3. Выбор гайда «Манифест наглости»
         if data == "gift_money":
             caption = (
@@ -316,7 +391,7 @@ def handle_update(update):
                 "Изучай и прекращай быть скромной 🖤"
             )
             send_document(chat_id, PDF_FILE_PATH, caption=caption, reply_markup=get_manifest_keyboard())
-            
+
         # 4. Выбор книги «Финансовый флирт»
         elif data == "gift_book":
             book_text = (
@@ -342,25 +417,26 @@ def handle_update(update):
             )
             send_document(chat_id, PDF_FILE_PATH, caption=caption, reply_markup=get_both_keyboard())
 
+
 def main():
     # Запускаем встроенный HTTP-сервер для Render в отдельном потоке
     http_thread = threading.Thread(target=start_health_server, daemon=True)
     http_thread.start()
-    
+
     logging.info("🚀 Starting Bot @via_kairos_bot...")
-    
+
     try:
         requests.post(f"{API_URL}/deleteWebhook", json={"drop_pending_updates": True}, timeout=10)
         requests.post(f"{API_URL}/setChatMenuButton", json={"menu_button": {"type": "default"}}, timeout=10)
     except Exception:
         pass
-    
+
     offset = 0
     while True:
         try:
             r = requests.get(
-                f"{API_URL}/getUpdates", 
-                params={"offset": offset, "timeout": 10}, 
+                f"{API_URL}/getUpdates",
+                params={"offset": offset, "timeout": 10},
                 timeout=15
             )
             if r.status_code == 200:
@@ -373,6 +449,7 @@ def main():
         except Exception as e:
             logging.error(f"Polling loop: {e}")
             time.sleep(1)
+
 
 if __name__ == "__main__":
     main()
