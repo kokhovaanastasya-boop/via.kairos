@@ -5,13 +5,14 @@ Telegram Bot for @via.kairos (Анастасия)
 Канал: https://t.me/+0hwBdSVNsDcyZGYy
 """
 
+import json
+import logging
 import os
 import sys
 import time
-import json
-import logging
 import requests
 
+# Токен бота
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8850880508:AAHGeajr-6aDhqGWmfQaE5jdL4uWNg2e9io")
 API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
@@ -34,6 +35,10 @@ if os.path.exists(CHANNEL_ID_FILE):
         pass
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+# Кэш для защиты от повторных сообщений и дублей
+processed_updates = set()
+processed_callbacks = set()
 
 # === 1. КНОПКИ ОБЯЗАТЕЛЬНОЙ ПОДПИСКИ (ПОКАЗЫВАЮТСЯ ВСЕГДА ПРИ /START) ===
 def get_sub_keyboard():
@@ -121,7 +126,7 @@ def is_subscribed_api(user_id):
     """Проверка подписки через Telegram Bot API"""
     global channel_id
     if not channel_id:
-        return True # Если ID канала еще не получен, пропускаем
+        return True
     try:
         r = requests.get(f"{API_URL}/getChatMember", params={"chat_id": channel_id, "user_id": user_id}, timeout=5)
         res = r.json()
@@ -135,7 +140,14 @@ def is_subscribed_api(user_id):
 def handle_update(update):
     global channel_id
     
-    # Авто-привязка канала
+    update_id = update.get("update_id")
+    if update_id in processed_updates:
+        return
+    processed_updates.add(update_id)
+    if len(processed_updates) > 2000:
+        processed_updates.clear()
+
+    # Авто-привязка канала при добавлении бота админом
     if "my_chat_member" in update:
         chat = update["my_chat_member"]["chat"]
         if chat.get("type") in ["channel", "supergroup"]:
@@ -166,7 +178,7 @@ def handle_update(update):
         user_id = msg["from"]["id"]
         text = (msg.get("text") or "").strip()
         
-        # Пересылка любого сообщения из канала привязывает ID
+        # Пересылка любого сообщения из канала боту сразу привязывает ID
         if "forward_from_chat" in msg:
             fwd = msg["forward_from_chat"]
             if fwd.get("type") == "channel":
@@ -181,7 +193,7 @@ def handle_update(update):
 
         logging.info(f"Message from {chat_id}: {text}")
         
-        # На команду /start ВСЕГДА отправляем сообщение с проверкой подписки
+        # На команду /start всегда отправляем блок подписки
         start_text = (
             "Привет! Рада видеть тебя здесь 🖤\n\n"
             "Я — <b>Анастасия (@via.kairos)</b>.\n"
@@ -189,11 +201,18 @@ def handle_update(update):
             "🔒 <b>Для получения подарков обязательно подпишись на мой канал:</b>\n"
         )
         send_message(chat_id, start_text, get_sub_keyboard())
+        return
 
     # Обработка нажатий на инлайн-кнопки
     elif "callback_query" in update:
         cb = update["callback_query"]
         cb_id = cb["id"]
+        if cb_id in processed_callbacks:
+            return
+        processed_callbacks.add(cb_id)
+        if len(processed_callbacks) > 2000:
+            processed_callbacks.clear()
+            
         chat_id = cb["message"]["chat"]["id"]
         user_id = cb["from"]["id"]
         data = cb.get("data", "")
@@ -210,7 +229,7 @@ def handle_update(update):
                 )
                 return
             
-            # Если подписана — поздравляем и открываем меню подарков!
+            # Подписка подтверждена!
             answer_callback(cb_id, text="✅ Подписка подтверждена! Забирай подарки 🖤", show_alert=False)
             
             unlock_text = (
@@ -248,10 +267,11 @@ def handle_update(update):
             send_document(chat_id, PDF_FILE_PATH, caption=caption, reply_markup=get_after_gift_keyboard())
 
 def main():
-    logging.info("🚀 Starting 100% Strict Subscription Bot @via_kairos_bot...")
+    logging.info("🚀 Starting 100% Clean Polling Bot @via_kairos_bot...")
     
     try:
-        requests.post(f"{API_URL}/deleteWebhook", json={"drop_pending_updates": False}, timeout=10)
+        requests.post(f"{API_URL}/deleteWebhook", json={"drop_pending_updates": True}, timeout=10)
+        requests.post(f"{API_URL}/setChatMenuButton", json={"menu_button": {"type": "default"}}, timeout=10)
     except Exception:
         pass
     
