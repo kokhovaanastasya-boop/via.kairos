@@ -5,11 +5,11 @@ Telegram Bot for @via.kairos (Анастасия)
 Канал: https://t.me/+0hwBdSVNsDcyZGYy
 """
 
-import json
-import logging
 import os
 import sys
 import time
+import json
+import logging
 import requests
 
 # Токен бота
@@ -36,11 +36,10 @@ if os.path.exists(CHANNEL_ID_FILE):
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Кэш для защиты от повторных сообщений и дублей
 processed_updates = set()
 processed_callbacks = set()
 
-# === 1. КНОПКИ ОБЯЗАТЕЛЬНОЙ ПОДПИСКИ (ПОКАЗЫВАЮТСЯ ВСЕГДА ПРИ /START) ===
+# === 1. КНОПКИ ОБЯЗАТЕЛЬНОЙ ПОДПИСКИ (ПРИ /START) ===
 def get_sub_keyboard():
     return {
         "inline_keyboard": [
@@ -49,23 +48,41 @@ def get_sub_keyboard():
         ]
     }
 
-# === 2. МЕНЮ ВЫБОРА ПОДАРКОВ (ПОЯВЛЯЕТСЯ ТОЛЬКО ПОСЛЕ ПОДПИСКИ) ===
+# === 2. ГЛАВНОЕ МЕНЮ ПОДАРКОВ ===
 def get_main_keyboard():
     return {
         "inline_keyboard": [
             [{"text": "💸 Манифест наглости", "callback_data": "gift_money"}],
-            [{"text": "📖 Финансовый флирт", "web_app": {"url": MANUFLIRT_URL}}],
+            [{"text": "📖 Финансовый флирт", "callback_data": "gift_book"}],
             [{"text": "🔥 Я жадная: хочу забрать ВСЁ и сразу!", "callback_data": "gift_both"}]
         ]
     }
 
-# === 3. КНОПКИ ПОД ФАЙЛОМ ГАЙДА (ТОЛЬКО 3 КНОПКИ) ===
-def get_after_gift_keyboard():
+# === 3. КНОПКИ ПОД ГАЙДОМ «МАНИФЕСТ НАГЛОСТИ» ===
+def get_manifest_keyboard():
     return {
         "inline_keyboard": [
             [{"text": "💸 Гайд «Манифест наглости»", "url": PRESENTATION_PREVIEW_URL}],
-            [{"text": "📖 Книга «Финансовый флирт»", "web_app": {"url": MANUFLIRT_URL}}],
-            [{"text": "🎯 Записаться на Разбор ", "url": AUDIT_INSTAGRAM_URL}]
+            [{"text": "🎯 Записаться на Разбор", "url": AUDIT_INSTAGRAM_URL}]
+        ]
+    }
+
+# === 4. КНОПКИ ПОД ОПИСАНИЕМ КНИГИ «ФИНАНСОВЫЙ ФЛИРТ» ===
+def get_book_keyboard():
+    return {
+        "inline_keyboard": [
+            [{"text": "🫦 Открыть книгу «Финансовый флирт»", "web_app": {"url": MANUFLIRT_URL}}],
+            [{"text": "🎯 Записаться на Разбор", "url": AUDIT_INSTAGRAM_URL}]
+        ]
+    }
+
+# === 5. КНОПКИ ДЛЯ «Я ЖАДНАЯ» (ВСЁ ВМЕСТЕ) ===
+def get_both_keyboard():
+    return {
+        "inline_keyboard": [
+            [{"text": "💸 Гайд «Манифест наглости»", "url": PRESENTATION_PREVIEW_URL}],
+            [{"text": "🫦 Книга «Финансовый флирт»", "web_app": {"url": MANUFLIRT_URL}}],
+            [{"text": "🎯 Записаться на Разбор", "url": AUDIT_INSTAGRAM_URL}]
         ]
     }
 
@@ -147,7 +164,7 @@ def handle_update(update):
     if len(processed_updates) > 2000:
         processed_updates.clear()
 
-    # Авто-привязка канала при добавлении бота админом
+    # 1. Авто-привязка канала
     if "my_chat_member" in update:
         chat = update["my_chat_member"]["chat"]
         if chat.get("type") in ["channel", "supergroup"]:
@@ -168,17 +185,17 @@ def handle_update(update):
                 f.write(str(channel_id))
         except Exception:
             pass
-        logging.info(f"🎉 Канал привязан: ID = {channel_id}")
+        logging.info(f"🎉 Канал привязан из поста: ID = {channel_id}")
         return
 
-    # Обработка сообщений
+    # 2. Обработка входящих сообщений
     if "message" in update:
         msg = update["message"]
         chat_id = msg["chat"]["id"]
         user_id = msg["from"]["id"]
         text = (msg.get("text") or "").strip()
         
-        # Пересылка любого сообщения из канала боту сразу привязывает ID
+        # Пересылка любого поста из канала привязывает ID
         if "forward_from_chat" in msg:
             fwd = msg["forward_from_chat"]
             if fwd.get("type") == "channel":
@@ -193,7 +210,7 @@ def handle_update(update):
 
         logging.info(f"Message from {chat_id}: {text}")
         
-        # На команду /start всегда отправляем блок подписки
+        # На команду /start всегда отправляем блок обязательной подписки
         start_text = (
             "Привет! Рада видеть тебя здесь 🖤\n\n"
             "Я — <b>Анастасия (@via.kairos)</b>.\n"
@@ -203,7 +220,7 @@ def handle_update(update):
         send_message(chat_id, start_text, get_sub_keyboard())
         return
 
-    # Обработка нажатий на инлайн-кнопки
+    # 3. Обработка нажатий на инлайн-кнопки
     elif "callback_query" in update:
         cb = update["callback_query"]
         cb_id = cb["id"]
@@ -219,7 +236,7 @@ def handle_update(update):
         
         logging.info(f"Callback from {chat_id}: {data}")
         
-        # 1. Нажатие на кнопку «Я подписалась!»
+        # 1. Проверка подписки
         if data == "check_sub":
             if channel_id and not is_subscribed_api(user_id):
                 answer_callback(
@@ -229,9 +246,7 @@ def handle_update(update):
                 )
                 return
             
-            # Подписка подтверждена!
             answer_callback(cb_id, text="✅ Подписка подтверждена! Забирай подарки 🖤", show_alert=False)
-            
             unlock_text = (
                 "⚡️ <b>Твой подарок — это не просто подарок. Это пропуск в мой мир наглости😉</b>\n\n"
                 "Выбирай, какой подарок хочешь забрать прямо сейчас 👇"
@@ -241,33 +256,47 @@ def handle_update(update):
             
         answer_callback(cb_id)
         
-        # 2. Выдача «Манифест наглости»
+        # 2. Выбор гайда «Манифест наглости»
         if data == "gift_money":
             caption = (
                 "⚡️ <b>Твой авторский «Манифест Наглости» (12 слайдов) готов!</b>\n\n"
                 "Внутри гайда:\n"
-                "❌ Диагностика роли «хорошей девочки»\n"
-                "🛑 5 установок, сливающих доход\n"
+                "🧐 Диагностика роли «хорошей девочки»\n"
+                "🚰 5 установок, сливающих доход\n"
                 "📝 Экспресс-тест на уровень наглости\n"
                 "🚀 Формула: Личность → Бренд → High-Ticket чек (80k–150k ₽)\n"
                 "💬 Готовые скрипты для продаж в переписке\n\n"
                 "Изучай и прекращай быть скромной 🖤"
             )
-            send_document(chat_id, PDF_FILE_PATH, caption=caption, reply_markup=get_after_gift_keyboard())
+            send_document(chat_id, PDF_FILE_PATH, caption=caption, reply_markup=get_manifest_keyboard())
             
-        # 3. Выдача «Я жадная: хочу забрать ВСЁ»
+        # 3. Выбор книги «Финансовый флирт» (с описанием и запуском приложения)
+        elif data == "gift_book":
+            book_text = (
+                "🫦 <b>Интерактивная книга «Финансовый флирт»</b>\n"
+                "<i>Как красиво просить, отвечать и уходить</i>\n\n"
+                "Внутри книги:\n"
+                "💎 <b>100 готовых фраз</b> на все случаи жизни (от свиданий до переговоров)\n"
+                "📜 <b>4 нерушимых закона</b> финансового флирта\n"
+                "🛡 <b>10 щитов</b> от мужских манипуляций и возражений\n"
+                "👠 <b>Искусство красивого ухода:</b> как выйти из ситуации королевой\n\n"
+                "Нажимай кнопку ниже, чтобы открыть интерактивную книгу прямо в Telegram 👇"
+            )
+            send_message(chat_id, book_text, reply_markup=get_book_keyboard())
+
+        # 4. Выбор «Я жадная: хочу забрать ВСЁ»
         elif data == "gift_both":
             caption = (
                 "🔥 <b>Обожаю жадных до жизни и денег девушек! Именно такие и забирают всё лучшее</b>\n\n"
                 "Твой полный комплект Наглости готов:\n\n"
                 "1️⃣ <b>ГАЙД:</b> «Манифест Наглости» синдром хорошей девочки.\n"
-                "2️⃣ <b>КНИГА:</b> Книга «Как красиво просить,отвечать и уходить».\n\n"
+                "2️⃣ <b>КНИГА:</b> Интерактивная книга «Финансовый флирт: 100 фраз и правила ухода».\n\n"
                 "Скромность не украшает. Украшают чеки и подарки 😉"
             )
-            send_document(chat_id, PDF_FILE_PATH, caption=caption, reply_markup=get_after_gift_keyboard())
+            send_document(chat_id, PDF_FILE_PATH, caption=caption, reply_markup=get_both_keyboard())
 
 def main():
-    logging.info("🚀 Starting 100% Clean Polling Bot @via_kairos_bot...")
+    logging.info("🚀 Starting Clean Bot @via_kairos_bot...")
     
     try:
         requests.post(f"{API_URL}/deleteWebhook", json={"drop_pending_updates": True}, timeout=10)
