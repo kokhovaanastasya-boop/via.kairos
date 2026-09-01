@@ -16,14 +16,8 @@ import threading
 import time
 import requests
 
-# Токен бота — ТОЛЬКО из переменной окружения.
-# Старый токен 8850880508:AAHGe... отозван в BotFather и больше не работает (401).
-# Никогда не храни токен в коде: он утекает вместе с репозиторием и перепиской.
-BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8850880508:AAEo73VhuFfs4yU-afJCivSGDW0pQYPWW8A").strip()
 if not BOT_TOKEN:
-    print("❌ Не задан BOT_TOKEN. Render: Environment -> BOT_TOKEN = токен от @BotFather.\n"
-          "   Локально: BOT_TOKEN=123:ABC python3 bot.py", file=sys.stderr)
-    sys.exit(1)
 API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 CHANNEL_INVITE_URL = "https://t.me/+0hwBdSVNsDcyZGYy"
@@ -442,7 +436,7 @@ MANIFEST_TEXT = (
     "🔎 <b>Диагностика</b> твоей роли, которая сливает деньги.\n"
     "📝 <b>Экспресс-тест</b> на твой уровень здоровой наглости "
     "(спойлер: его нужно прокачать).\n"
-    "🚀 <b>Готовая формула дохода:</b> Личность → Бренд → Доход.\n"
+    "🚀 <b>Готовая формула дохода:</b> Личность → Бренд → Доход х2.\n"
     "💬 <b>Скрипты продаж в переписке</b>, которые закрывают сделки без стеснения.\n\n"
     "Пора прекращать быть скромной и начинать зарабатывать с удовольствием 🖤"
 )
@@ -466,7 +460,7 @@ BOTH_TEXT = (
     "Твой личный детокс от установок «быть хорошей».\n\n"
     "🔎 <b>Диагностика</b> твоей роли, которая сливает деньги.\n"
     "📝 <b>Экспресс-тест</b> на твой уровень здоровой наглости.\n"
-    "🚀 <b>Формула дохода:</b> Личность → Бренд → Чек от 80 000 до 150 000 ₽.\n"
+    "🚀 <b>Формула дохода:</b> Личность → Бренд → Доход х2.\n"
     "💬 <b>Скрипты продаж в переписке</b> без стеснения.\n\n"
     "<b>Твой ход:</b> жми на кнопки ниже — книга открывается прямо в Telegram, "
     "гайд прикреплён файлом 👇\n\n"
@@ -646,6 +640,14 @@ def handle_update(update):
         # 5. Выбор «Я жадная: хочу забрать ВСЁ»
         elif data == "gift_both":
             send_offer(chat_id, BOTH_TEXT, get_both_keyboard(), attach_pdf=True)
+
+
+# ВАЖНО: без явного allowed_updates Telegram помнит старый список
+# ["message","callback_query"] и НЕ шлёт my_chat_member / channel_post / chat_member,
+# из-за чего канал не привязывается, а отписки не отслеживаются.
+ALLOWED_UPDATES = ["message", "callback_query", "my_chat_member", "channel_post", "chat_member"]
+
+DROP_PENDING = os.getenv("DROP_PENDING", "0") == "1"
 
 
 def main():
