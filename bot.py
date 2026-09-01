@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+##!/usr/bin/env python3
 """
 Telegram Bot for @via.kairos (Анастасия)
 100% Обязательная подписка на канал перед выдачей подарков
@@ -17,7 +17,7 @@ import time
 import requests
 
 # Токен бота
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8850880508:AAHGeajr-6aDhqGWmfQaE5jdL4uWNg2e9io")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8850880508:AAFRaJaMfi4UU515edLtSBUXyTRSMo5KStw")
 API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 CHANNEL_INVITE_URL = "https://t.me/+0hwBdSVNsDcyZGYy"
@@ -88,8 +88,8 @@ def start_health_server():
 def get_sub_keyboard():
     return {
         "inline_keyboard": [
-            [{"text": "🖤 Подписаться на канал", "url": CHANNEL_INVITE_URL}],
-            [{"text": "✅ Я подписалась! Забрать подарки 🎁", "callback_data": "check_sub"}]
+            [{"text": "Подписаться на канал 🖤", "url": CHANNEL_INVITE_URL}],
+            [{"text": "Я подписалась!✅ Забрать подарки 🎁", "callback_data": "check_sub"}]
         ]
     }
 
@@ -189,6 +189,17 @@ def send_message(chat_id, text, reply_markup=None, track=True):
     try:
         r = requests.post(f"{API_URL}/sendMessage", json=payload, timeout=10)
         res = r.json()
+        if not res.get("ok"):
+            # ГЛАВНАЯ ПРИЧИНА "БОТ МОЛЧИТ": ошибка видна только здесь
+            logging.error(
+                f"❌ sendMessage FAILED [{res.get('error_code')}]: {res.get('description')} | chat={chat_id}"
+            )
+            if res.get("error_code") == 400 and "parse" in str(res.get("description", "")).lower():
+                # HTML сломан — шлём тем же текстом, но без разметки, чтобы юзер не остался без ответа
+                payload.pop("parse_mode", None)
+                r = requests.post(f"{API_URL}/sendMessage", json=payload, timeout=10)
+                res = r.json()
+                logging.warning("↩️ Отправлено без parse_mode (фолбэк)")
         if track:
             remember_message(chat_id, res)
         return res
@@ -225,6 +236,16 @@ def send_document(chat_id, file_path, caption=None, reply_markup=None, track=Tru
             files = {"document": ("Манифест_Наглости_via_kairos.pdf", f, "application/pdf")}
             r = requests.post(f"{API_URL}/sendDocument", data=data, files=files, timeout=30)
             res = r.json()
+            if not res.get("ok"):
+                logging.error(
+                    f"❌ sendDocument FAILED [{res.get('error_code')}]: {res.get('description')} | chat={chat_id}"
+                )
+                return send_message(
+                    chat_id,
+                    (caption or "") + f"\n\n📖 <b>Читать онлайн:</b> {PRESENTATION_PREVIEW_URL}",
+                    reply_markup,
+                    track=track
+                )
             if track:
                 remember_message(chat_id, res)
             return res
@@ -309,7 +330,7 @@ def handle_update(update):
     if "message" in update:
         msg = update["message"]
         chat_id = msg["chat"]["id"]
-        user_id = msg["from"]["id"]
+        user_id = (msg.get("from") or {}).get("id")  # у анонимных постов "from" нет -> раньше KeyError убивал цикл
         user_msg_id = msg.get("message_id")
         text = (msg.get("text") or "").strip()
 
@@ -338,7 +359,9 @@ def handle_update(update):
             "Забираю страхи, выбиваю синдром «хорошей девочки» и возвращаю природную дерзость.\n\n"
             "🔒 <b>Для получения подарков обязательно подпишись на мой канал:</b>\n"
         )
-        send_message(chat_id, start_text, get_sub_keyboard())
+        res = send_message(chat_id, start_text, get_sub_keyboard())
+        if res and res.get("ok"):
+            logging.info(f"✅ Приветствие отправлено в чат {chat_id}")
         return
 
     # 3. Обработка нажатий на инлайн-кнопки
@@ -507,4 +530,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
