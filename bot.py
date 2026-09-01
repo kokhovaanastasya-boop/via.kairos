@@ -49,7 +49,7 @@ def get_main_keyboard():
     return {
         "inline_keyboard": [
             [{"text": "💸 Манифест наглости", "callback_data": "gift_money"}],
-            [{"text": "👑 Финансовый флирт", "web_app": {"url": MANUFLIRT_URL}}],
+            [{"text": "📖 Финансовый флирт", "web_app": {"url": MANUFLIRT_URL}}],
             [{"text": "🔥 Я жадная: хочу забрать ВСЁ и сразу!", "callback_data": "gift_both"}]
         ]
     }
@@ -58,9 +58,9 @@ def get_main_keyboard():
 def get_after_gift_keyboard():
     return {
         "inline_keyboard": [
-            [{"text": "📖 Читать Манифест наглости", "url": PRESENTATION_PREVIEW_URL}],
-            [{"text": "👑 Книга «Финансовый флирт»", "web_app": {"url": MANUFLIRT_URL}}],
-            [{"text": "🎯 Записаться на Разбор в Instagram", "url": AUDIT_INSTAGRAM_URL}]
+            [{"text": "💸 Гайд «Манифест наглости»", "url": PRESENTATION_PREVIEW_URL}],
+            [{"text": "📖 Книга «Финансовый флирт»", "web_app": {"url": MANUFLIRT_URL}}],
+            [{"text": "🎯 Записаться на Разбор ", "url": AUDIT_INSTAGRAM_URL}]
         ]
     }
 
@@ -187,8 +187,8 @@ def handle_update(update):
             "Я — <b>Анастасия (@via.kairos)</b>.\n"
             "Забираю страхи, выбиваю синдром «хорошей девочки» и возвращаю природную дерзость.\n\n"
             "🔒 <b>Для получения подарков обязательно подпишись на мой канал:</b>\n"
-            "1. Нажми кнопку <b> 🖤 Подписаться на канал»</b>\n"
-            "2. После вступления нажми <b> ✅ Я подписалась! Забрать подарки»</b> 👇"
+            " <b> 🖤 Подпишись на канал»</b>\n"
+            " <b> ✅ Я подписалась! Забрать подарки»</b> 👇"
         )
         send_message(chat_id, start_text, get_sub_keyboard())
 
@@ -207,7 +207,7 @@ def handle_update(update):
             if channel_id and not is_subscribed_api(user_id):
                 answer_callback(
                     cb_id,
-                    text="❌ Ты ещё не подписалась на канал! Сначала подпишись по кнопке 1 😉",
+                    text="❌ Ты ещё не подписалась на канал! Сначала подпишись 😉",
                     show_alert=True
                 )
                 return
@@ -243,8 +243,8 @@ def handle_update(update):
             caption = (
                 "🔥 <b>Обожаю жадных до жизни и денег девушек! Именно такие и забирают всё лучшее</b>\n\n"
                 "Твой полный комплект Наглости готов:\n\n"
-                "1️⃣ <b>ГАЙД:</b> 12-страничный «Манифест Наглости».\n"
-                "2️⃣ <b>КНИГА:</b> Интерактивная книга «Финансовый флирт: 100 фраз и правила ухода».\n\n"
+                "1️⃣ <b>ГАЙД:</b> «Манифест Наглости».\n"
+                "2️⃣ <b>КНИГА:</b> Книга «Финансовый флирт: 100 фраз и правила ухода».\n\n"
                 "Скромность не украшает. Украшают чеки и подарки 😉"
             )
             send_document(chat_id, PDF_FILE_PATH, caption=caption, reply_markup=get_after_gift_keyboard())
