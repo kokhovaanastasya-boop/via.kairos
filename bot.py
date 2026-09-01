@@ -15,11 +15,11 @@ import sys
 import threading
 import time
 import requests
-
+BOT_TOKEN   = 8850880508:AAEo73VhuFfs4yU-afJCivSGDW0pQYPWW8A
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8850880508:AAEo73VhuFfs4yU-afJCivSGDW0pQYPWW8A").strip()
-if not BOT_TOKEN:
+BOT_TOKEN:
 API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
-
+CHANNEL_ID  = -1002611112542
 CHANNEL_INVITE_URL = "https://t.me/+0hwBdSVNsDcyZGYy"
 MANUFLIRT_URL = "https://manuflirt.netlify.app/"
 AUDIT_INSTAGRAM_URL = "https://www.instagram.com/via.kairos?igsi=MW8xbzVhZGFpMWRucA=="
