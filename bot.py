@@ -15,11 +15,35 @@ import sys
 import threading
 import time
 import requests
-BOT_TOKEN   = 8850880508:AAEo73VhuFfs4yU-afJCivSGDW0pQYPWW8A
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8850880508:AAEo73VhuFfs4yU-afJCivSGDW0pQYPWW8A").strip()
-BOT_TOKEN:
+
+# ==============================================================
+#  ТОКЕН БОТА
+#
+#  Вариант 1 (правильный): Render -> Environment -> BOT_TOKEN
+#      Тогда строку ниже НЕ трогай, оставь пустые кавычки.
+#
+#  Вариант 2 (если не хочется возиться): вставь токен ниже
+#      СТРОГО МЕЖДУ КАВЫЧКАМИ, кавычки НЕ удалять:
+#      BOT_TOKEN_HERE = "8850880508:AAEo73VhuFf..."
+#
+#  ❌ Без кавычек будет SyntaxError и деплой упадёт.
+# ==============================================================
+BOT_TOKEN_HERE = "8850880508:AAEo73VhuFfs4yU-afJCivSGDW0pQYPWW8A"
+
+BOT_TOKEN = (os.getenv("BOT_TOKEN", "") or BOT_TOKEN_HERE).strip()
+
+if not BOT_TOKEN:
+    print(
+        "\n❌ ТОКЕН НЕ ЗАДАН.\n"
+        "   Render: Dashboard -> сервис -> Environment -> Add Environment Variable\n"
+        "           Key = BOT_TOKEN   Value = токен от @BotFather -> Save changes\n"
+        "   Либо впиши его в строку BOT_TOKEN_HERE = "8850880508:AAEO-Tgu2_OmGSU9hxsA0GQTHcLHIr8vXVA" в кавычках.\n",
+        file=sys.stderr
+    )
+    sys.exit(1)
+    
 API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
-CHANNEL_ID  = -1002611112542
+
 CHANNEL_INVITE_URL = "https://t.me/+0hwBdSVNsDcyZGYy"
 MANUFLIRT_URL = "https://manuflirt.netlify.app/"
 AUDIT_INSTAGRAM_URL = "https://www.instagram.com/via.kairos?igsi=MW8xbzVhZGFpMWRucA=="
@@ -29,8 +53,16 @@ PDF_FILE_PATH = "Manifest_Naglosti_via_kairos.pdf"
 CHANNEL_ID_FILE = "channel_id.txt"
 channel_id = None
 
-# Приоритет — переменная окружения (на Render файлы пропадают при передеплое)
-_env_channel = os.getenv("CHANNEL_ID", "").strip()
+# ==============================================================
+#  ID КАНАЛА «I Allow» — тоже в кавычках!
+#  Нужен для проверки подписки и отзыва подарков при отписке.
+#  На Render файл channel_id.txt стирается при передеплое,
+#  поэтому ID зашит здесь.
+# ==============================================================
+CHANNEL_ID_HERE = "-1002611112542"
+
+# Приоритет — переменная окружения, затем значение выше
+_env_channel = (os.getenv("CHANNEL_ID", "") or CHANNEL_ID_HERE).strip()
 if _env_channel:
     try:
         channel_id = int(_env_channel)
@@ -436,7 +468,7 @@ MANIFEST_TEXT = (
     "🔎 <b>Диагностика</b> твоей роли, которая сливает деньги.\n"
     "📝 <b>Экспресс-тест</b> на твой уровень здоровой наглости "
     "(спойлер: его нужно прокачать).\n"
-    "🚀 <b>Готовая формула дохода:</b> Личность → Бренд → Доход х2.\n"
+    "🚀 <b>Готовая формула дохода:</b> Личность → Бренд → Чек от 80 000 до 150 000 ₽.\n"
     "💬 <b>Скрипты продаж в переписке</b>, которые закрывают сделки без стеснения.\n\n"
     "Пора прекращать быть скромной и начинать зарабатывать с удовольствием 🖤"
 )
@@ -460,7 +492,7 @@ BOTH_TEXT = (
     "Твой личный детокс от установок «быть хорошей».\n\n"
     "🔎 <b>Диагностика</b> твоей роли, которая сливает деньги.\n"
     "📝 <b>Экспресс-тест</b> на твой уровень здоровой наглости.\n"
-    "🚀 <b>Формула дохода:</b> Личность → Бренд → Доход х2.\n"
+    "🚀 <b>Формула дохода:</b> Личность → Бренд → Чек от 80 000 до 150 000 ₽.\n"
     "💬 <b>Скрипты продаж в переписке</b> без стеснения.\n\n"
     "<b>Твой ход:</b> жми на кнопки ниже — книга открывается прямо в Telegram, "
     "гайд прикреплён файлом 👇\n\n"
