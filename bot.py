@@ -68,7 +68,7 @@ if _env_channel:
         channel_id = int(_env_channel)
     except ValueError:
         logging.warning("CHANNEL_ID должен быть числом вида -1001234567890")
-
+CHANNEL_ID_HERE = "-1002611112542"
 if channel_id is None and os.path.exists(CHANNEL_ID_FILE):
     try:
         with open(CHANNEL_ID_FILE, "r") as f:
